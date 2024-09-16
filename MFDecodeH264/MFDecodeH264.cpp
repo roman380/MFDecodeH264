@@ -466,7 +466,9 @@ int main()
         int notAccept = 0;
         auto file = CreateFile(L"h264.h264", GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
         WIN32CHECK(file != INVALID_HANDLE_VALUE);
-        do
+
+        DWORD TotalRead = 0;
+        for(bool Done = false; !Done; )
         {
             // get a random chunk size between 500 and 1500
             DWORD chunkSize = 500 + (1000 * (RAND_MAX - std::rand())) / RAND_MAX;
@@ -499,39 +501,47 @@ int main()
             }
             else
             {
+                _RPTWN(_CRT_WARN, L"Draining, TotalRead %u\n", TotalRead);
                 // end of file, ask decoder to process all data from previous calls
                 HRCHECK(decoder->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0));
             }
+            TotalRead += read;
+
+            for(bool Continue = true; Continue; )
+            {
+
+            MFT_OUTPUT_STREAM_INFO output_stream_info;
+            HRESULT hrtemp = decoder->GetOutputStreamInfo(0, &output_stream_info);
+            WINRT_ASSERT(output_stream_info.cbSize);
 
             winrt::com_ptr<IMFSample> outputSample;
             HRCHECK(MFCreateSample(outputSample.put()));
             MFT_OUTPUT_DATA_BUFFER outputBuffer{};
             outputBuffer.pSample = outputSample.get();
 
-            if (sampleSize)
+            //if (sampleSize)
             {
                 // now we know the size so we can (and must) allocate the MF output buffer
                 winrt::com_ptr<IMFMediaBuffer> outputBuffer;
-                HRCHECK(MFCreateMemoryBuffer(sampleSize, outputBuffer.put()));
+                HRCHECK(MFCreateMemoryBuffer(output_stream_info.cbSize, outputBuffer.put()));
                 HRCHECK(outputSample->AddBuffer(outputBuffer.get()));
             } // else just continue to process
 
             DWORD status = 0;
             auto hr = decoder->ProcessOutput(0, 1, &outputBuffer, &status);
-            MFT_OUTPUT_STREAM_INFO output_stream_info;
-            HRESULT hrtemp = decoder->GetOutputStreamInfo(0, &output_stream_info);
-
-    
+            _RPTWN(_CRT_WARN, L"hr 0x%08X\n", hr);
 
             if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) // just go on
             {
                 if (!read) // file is all read
+                {
+                    Done = true;
                     break;
+                }
 
-                continue;
+                break; //continue;
             }
             
-
             // https://learn.microsoft.com/en-us/windows/win32/medfound/handling-stream-changes
             if (hr == MF_E_TRANSFORM_STREAM_CHANGE)
             {
@@ -543,7 +553,7 @@ int main()
                 winrt::com_ptr<IMFMediaType> type;
                 HRCHECK(decoder->GetOutputCurrentType(0, type.put()));
                 HRCHECK(type->GetUINT32(MF_MT_SAMPLE_SIZE, &sampleSize));
-                continue;
+                break; //continue;
             }
             HRCHECK(hr);
 
@@ -552,10 +562,15 @@ int main()
             HRCHECK(outputSample->GetSampleDuration(&duration));
             wprintf(L"Sample time: %I64u ms duration: %I64u ms\n", time / 10000, duration / 10000);
             c++; // need 250, but now 230,234,240
-            notAccept;
-        } while (true);
 
+            }
+
+            notAccept;
+        }
+
+        WINRT_ASSERT(TotalRead == 1'280'742u);
         wprintf(L"Total cound %d\n", c);
+        WINRT_ASSERT(c == 250u);
 
         // close file
         CloseHandle(file);
